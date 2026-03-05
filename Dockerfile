@@ -1,5 +1,5 @@
 # backend/Dockerfile
-FROM ruby:3.3.0
+FROM ruby:3.3.6
 
 # Instala dependências do sistema necessárias para o Rails e o PostgreSQL
 RUN apt-get update -qq && apt-get install -y build-essential libpq-dev nodejs
