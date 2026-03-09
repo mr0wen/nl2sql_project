@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Terminal, Database, Loader2 } from 'lucide-react';
+import { Send, Terminal, Database, Loader2, GitBranch } from 'lucide-react';
 
 // Tipagem para as mensagens do chat
 type Message = {
@@ -13,6 +13,7 @@ type Message = {
 
 function App() {
   const [prompt, setPrompt] = useState('');
+  const [version, setVersion] = useState<'v1' | 'v2'>('v2'); // Controle de Fase
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -35,7 +36,8 @@ function App() {
       const response = await fetch('http://localhost:3000/api/v1/queries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMessage.content }),
+        // Enviando a versão selecionada para a API
+        body: JSON.stringify({ question: userMessage.content, version }),
       });
 
       const result = await response.json();
@@ -45,8 +47,9 @@ function App() {
       const assistantMessage: Message = {
         id: Date.now() + 1,
         role: 'assistant',
-        content: 'Aqui está o resultado da sua consulta:',
-        sql: result.sql,
+        content: `Aqui está o resultado da sua consulta (utilizando a arquitetura ${version.toUpperCase()}):`,
+        // Garante compatibilidade caso o backend retorne sql ou sql_generated
+        sql: result.sql || result.sql_generated, 
         data: result.data,
       };
       
@@ -64,10 +67,33 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 font-sans">
       
-      {/* Header */}
-      <header className="flex items-center p-4 bg-gray-800 border-b border-gray-700 shadow-sm">
-        <Database className="w-6 h-6 mr-3 text-emerald-400" />
-        <h1 className="text-xl font-semibold">Assistente NL2SQL</h1>
+      {/* Header com Toggle de Versão */}
+      <header className="flex items-center justify-between p-4 bg-gray-800 border-b border-gray-700 shadow-sm">
+        <div className="flex items-center">
+          <Database className="w-6 h-6 mr-3 text-emerald-400" />
+          <h1 className="text-xl font-semibold">Assistente NL2SQL</h1>
+        </div>
+        
+        {/* Toggle UI */}
+        <div className="flex items-center bg-gray-900 rounded-lg p-1 border border-gray-700">
+          <GitBranch className="w-4 h-4 mr-2 text-gray-500 ml-2" />
+          <button
+            onClick={() => setVersion('v1')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              version === 'v1' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            Fase 1 (Flat)
+          </button>
+          <button
+            onClick={() => setVersion('v2')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              version === 'v2' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            Fase 2 (Relacional)
+          </button>
+        </div>
       </header>
 
       {/* Área do Chat */}
@@ -76,7 +102,7 @@ function App() {
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <Database className="w-16 h-16 mb-4 opacity-20" />
             <p className="text-lg">Faça uma pergunta sobre o banco de dados de filmes.</p>
-            <p className="text-sm">Ex: "Qual o filme mais antigo?" ou "Top 3 de bilheteria da Marvel"</p>
+            <p className="text-sm">Ex: "Qual o filme mais antigo?" ou "Top 3 de bilheteria do Christopher Nolan"</p>
           </div>
         )}
 
@@ -102,7 +128,7 @@ function App() {
                   <div className="flex items-center bg-gray-800 px-4 py-2 text-xs text-gray-400">
                     <Terminal className="w-4 h-4 mr-2" /> PostgreSQL
                   </div>
-                  <pre className="p-4 text-sm font-mono text-emerald-300 overflow-x-auto">
+                  <pre className="p-4 text-sm font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap">
                     <code>{msg.sql}</code>
                   </pre>
                 </div>
@@ -174,7 +200,7 @@ function App() {
             </button>
           </form>
           <div className="text-center mt-2 text-xs text-gray-500">
-            A IA pode cometer erros. Verifique a query SQL gerada.
+            A IA pode cometer erros. Verifique a query SQL gerada. O motor de segurança impede comandos maliciosos.
           </div>
         </div>
       </footer>
