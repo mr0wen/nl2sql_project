@@ -4,7 +4,14 @@ Este é um projeto desenvolvido estritamente para **fins de estudos e pesquisa a
 
 ## 🎯 Objetivo
 
-O assistente atua como uma interface inteligente de banco de dados. O usuário insere uma pergunta em linguagem comum (ex: _"Quais são os 3 filmes com maior bilheteria da Marvel?"_), o sistema traduz essa intenção para uma query SQL otimizada usando o modelo **Google Gemini 2.5 Flash**, executa a consulta de forma segura e devolve os dados em uma tabela dinâmica.
+O assistente atua como uma interface inteligente de banco de dados. O usuário insere uma pergunta em linguagem comum (ex: _"Quais são os 3 filmes com maior bilheteria da Marvel?"_, _"Liste os top 5 filmes de maior bilheteria que tenham a participação do ator Christian Bale."_), o sistema traduz essa intenção para uma query SQL otimizada usando o modelo **Google Gemini 2.5 Flash**, executa a consulta de forma segura e devolve os dados em uma tabela dinâmica.
+
+## 🚀 Fases de Implementação (Evolução da Arquitetura)
+
+O projeto foi estruturado para demonstrar e comparar a capacidade de raciocínio lógico (NLP) do modelo de IA em diferentes complexidades de banco de dados. A interface possui um botão para alternar os motores em tempo real:
+
+- **Fase 1 (Tabela Única / Flat):** Arquitetura baseada em uma única tabela (`movies`). Ideal para demonstrar filtros diretos (`WHERE`, `ORDER BY`, `LIMIT`) e validação da API base.
+- **Fase 2 (Banco Relacional / 3FN):** O sistema evolui para uma estrutura normalizada com tabelas independentes em português (`filmes`, `atores`, `diretores`, `generos`, etc.). Esta fase funciona como um teste de estresse para a IA, exigindo compreensão de chaves estrangeiras (Foreign Keys) e a construção de múltiplos `JOINS` sem ambiguidades.
 
 ## 🛠️ Tecnologias e Arquitetura
 
@@ -15,13 +22,15 @@ O assistente atua como uma interface inteligente de banco de dados. O usuário i
 - **Infraestrutura:** Docker & Docker Compose.
 - **Web Scraping:** Nokogiri (Ruby) com algoritmo de mapeamento matricial 2D para extração de tabelas HTML complexas.
 
-## 🔒 Camada de Segurança (Prevenção contra Prompt Injection)
+## 🔒 Arquitetura de Segurança (Defesa em Profundidade)
 
-Executar SQL gerado por IA apresenta riscos severos. Este projeto implementa as seguintes travas a nível de aplicação (`SqlExecutionService`):
+Para garantir que a integração com o LLM não crie vulnerabilidades no banco de dados (como _Prompt Injection_ ou _Query Stacking_), o motor implementa um modelo de **Defesa em Duas Camadas**:
 
-1.  **Enforcement de Leitura:** Apenas instruções que iniciam com `SELECT` são processadas.
-2.  **Anti-Mutation:** Bloqueio via Regex de palavras-chave destrutivas (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, etc.).
-3.  **Anti-Stacking:** Bloqueio do caractere de terminação (`;`) para impedir o empilhamento de comandos maliciosos caso a IA sofra um bypass de prompt.
+1. **Camada de Sanitização (Motor de IA):** O `GeminiSqlService` fornece um contexto estrito (via _allowlist_ de tabelas) e proíbe a IA de gerar terminadores de instrução (`:`) que poderiam abrir brechas. Uma limpeza por código (`.chomp`) é feita antes do tráfego interno.
+2. **Camada de Validação / WAF (Executor SQL):** O `SqlExecutionService` age como um "firewall" interno que não confia na IA. Ele:
+   - Bloqueia qualquer instrução que não comece com `SELECT`.
+   - Proíbe palavras reservadas perigosas (`DROP`, `DELETE`, `UPDATE`, `INSERT`, etc).
+   - Impede ataques de _Stacking_ abortando a execução se identificar múltiplos comandos na mesma requisição.
 
 ## 🚀 Como Executar o Projeto Localmente
 
@@ -52,17 +61,23 @@ Executar SQL gerado por IA apresenta riscos severos. Este projeto implementa as 
     docker compose up -d --build
     ```
 
-    Prepare o Banco de Dados:
-    Execute os comandos abaixo para criar o banco, rodar as migrations e executar o script de seed (que fará o web scraping para popular a base com filmes de super-heróis):
+4.  **Configuração do Banco de Dados:**
 
     ```Bash
-    docker compose exec backend rails db:create
-    docker compose exec backend rails db:migrate
-    docker compose exec backend rails db:seed
+    docker compose exec backend rails db:prepare
     ```
 
-    Acesse a Aplicação:
-    Abra o seu navegador e acesse: http://localhost:5173
+5.  **Importação dos Dados do IMDB (Fase 2):**
+    Rode a task de ingestão de dados para popular as tabelas relacionais a partir dos arquivos .sql:
+
+    ```Bash
+    docker compose exec backend rails imdb:import_relational
+    ```
+
+6.  **Acesso à Aplicação:**
+
+    Frontend: Acesse http://localhost:5173
+    Backend (API): O Rails estará rodando em http://localhost:3000.
 
 ## 📝 Licença
 
