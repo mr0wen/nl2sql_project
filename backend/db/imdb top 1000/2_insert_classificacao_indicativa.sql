@@ -1,0 +1,17 @@
+INSERT INTO classificacao_indicativa (id, descricao) VALUES
+(1, '16'),
+(2, 'A'),
+(3, 'Approved'),
+(4, 'G'),
+(5, 'GP'),
+(6, 'PG'),
+(7, 'PG-13'),
+(8, 'Passed'),
+(9, 'R'),
+(10, 'TV-14'),
+(11, 'TV-MA'),
+(12, 'TV-PG'),
+(13, 'U'),
+(14, 'U/A'),
+(15, 'UA'),
+(16, 'Unrated');
