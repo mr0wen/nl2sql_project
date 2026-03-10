@@ -42,6 +42,10 @@ function App() {
 
       const result = await response.json();
 
+      if (response.status === 429 || (result.error && result.error.includes('429'))) {
+        throw new Error('⚠️ Limite diário da Inteligência Artificial atingido. A cota da API gratuita foi totalmente consumida. Por favor, retorne amanhã ou configure uma nova chave de acesso.');
+      }
+
       if (!response.ok) throw new Error(result.error || 'Erro desconhecido ao processar query');
 
       const assistantMessage: Message = {
