@@ -1,46 +1,97 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Terminal, Database, Loader2, GitBranch, Sparkles } from 'lucide-react';
 
-// Tipagem para as mensagens do chat
+// ============================================================================
+// TIPAGEM DE DADOS (TypeScript)
+// Garante a integridade da estrutura das mensagens trocadas no chat
+// ============================================================================
 type Message = {
   id: number;
   role: 'user' | 'assistant';
   content: string;
-  sql?: string | null;
-  data?: any[];
-  isError?: boolean;
+  sql?: string | null; // Armazena a query SQL gerada pela IA
+  data?: any[];        // Armazena o array de resultados vindos do PostgreSQL
+  isError?: boolean;   // Flag para renderização condicional de erros (vermelho)
 };
 
 function App() {
-  const [prompt, setPrompt] = useState('');
-  const [version, setVersion] = useState<'v1' | 'v2'>('v2'); // Controle de Fase
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // ============================================================================
+  // GESTÃO DE ESTADO (React Hooks)
+  // ============================================================================
+  const [prompt, setPrompt] = useState(''); // Controla o texto digitado pelo usuário
+  const [version, setVersion] = useState<'v1' | 'v2'>('v2'); // Controla qual banco de dados está ativo
+  const [messages, setMessages] = useState<Message[]>([]); // Histórico completo da conversa
+  const [isLoading, setIsLoading] = useState(false); // Controle visual do spinner de carregamento
+  
+  // Referência para o fim da lista de mensagens, usada para o auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll para a última mensagem
+  // Efeito colateral: Sempre que o array de mensagens mudar, rola a tela para baixo
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Nova função para lidar com a troca de base de dados (UX aprimorado)
+  // ============================================================================
+  // CONTROLADOR DE CONTEXTO (UX/UI)
+  // Limpa a tela ao trocar de "Cérebro/Banco", evitando confusão de dados
+  // ============================================================================
   const handleVersionChange = (newVersion: 'v1' | 'v2') => {
-    if (version === newVersion) return; // Evita re-render se clicar na mesma versão
+    if (version === newVersion) return; // Otimização: ignora se clicar na mesma aba
     setVersion(newVersion);
-    setMessages([]); // Limpa a tela de consultas
-    setPrompt(''); // Limpa o input de texto
+    setMessages([]); // Esvazia o chat
+    setPrompt('');   // Limpa o input
   };
 
+  // ============================================================================
+  // NÚCLEO DA APLICAÇÃO: Envio de Perguntas
+  // ============================================================================
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) return;
 
+    // 1. Renderiza a mensagem do usuário na tela instantaneamente
     const userMessage: Message = { id: Date.now(), role: 'user', content: prompt };
     setMessages((prev) => [...prev, userMessage]);
-    setPrompt('');
+    setPrompt(''); // Limpa a barra de digitação
+
+    // =========================================================================
+    // MIDDLEWARE DE FRONT-END: Filtro de Intenção (Client-Side Validation)
+    // Objetivo: Bloquear chamadas inúteis para a API e economizar a cota gratuita
+    // =========================================================================
+    const lowerPrompt = userMessage.content.toLowerCase();
+    
+    // Dicionários de intenção
+    const heroKeywords = ['marvel', 'dc', 'vingadores', 'avengers', 'super-herói', 'super herói', 'batman', 'aranha', 'spider', 'superman', 'herói'];
+    const imdbKeywords = ['nolan', 'dicaprio', 'tarantino', 'diretor', 'elenco', 'ator', 'atriz', 'oscar', 'imdb', 'spielberg', 'scorsese'];
+
+    // Regra 1: Bloqueia perguntas de Heróis quando na base do IMDb
+    if (version === 'v2' && heroKeywords.some(kw => lowerPrompt.includes(kw))) {
+      setMessages((prev) => [...prev, {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: 'Parece que você está fazendo uma pergunta sobre **Super-heróis** enquanto está conectado à base relacional do **IMDb**.\n\nPor favor, troque para a **"Fase 1 (Flat)"** no menu superior antes de pesquisar sobre esse tema.',
+        isError: true 
+      }]);
+      return; // Interrompe a função precocemente.
+    }
+
+    // Regra 2: Bloqueia perguntas do IMDb quando na base de Heróis
+    if (version === 'v1' && imdbKeywords.some(kw => lowerPrompt.includes(kw))) {
+      setMessages((prev) => [...prev, {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: 'Parece que você está buscando por **Diretores ou Elenco**, o que exige uma busca com relacionamentos (JOINs).\n\nPor favor, troque para a **"Fase 2 (Relacional)"** no menu superior antes de pesquisar sobre esse tema.',
+        isError: true
+      }]);
+      return; // Interrompe a função precocemente.
+    }
+    // =========================================================================
+
+    // 2. Aciona o estado de carregamento e prepara a requisição real
     setIsLoading(true);
 
     try {
+      // Faz a chamada ao nosso backend Rails (Service Object: GeminiSqlService)
       const response = await fetch('http://localhost:3000/api/v1/queries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -49,13 +100,15 @@ function App() {
 
       const result = await response.json();
 
-      // Interceptando o Rate Limit (Erro 429) do Gemini
+      // TRATAMENTO DE EXCEÇÃO DE API LIMIT: Captura o Erro 429 (Too Many Requests)
       if (response.status === 429 || (result.error && result.error.includes('429'))) {
-        throw new Error('⚠️ Limite diário da Inteligência Artificial atingido. A cota da API gratuita foi totalmente consumida. Por favor, retorne amanhã ou configure uma nova chave de acesso.');
+        throw new Error('Limite diário da Inteligência Artificial atingido. A cota da API gratuita foi totalmente consumida. Por favor, retorne amanhã ou configure uma nova chave de acesso.');
       }
 
+      // Tratamento genérico para erros do backend (ex: Prompt Injection detectado)
       if (!response.ok) throw new Error(result.error || 'Erro desconhecido ao processar query');
 
+      // 3. Monta a mensagem de sucesso com os dados retornados
       const assistantMessage: Message = {
         id: Date.now() + 1,
         role: 'assistant',
@@ -66,11 +119,13 @@ function App() {
       
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error: any) {
+      // 4. Captura qualquer erro e joga elegantemente na interface do chat
       setMessages((prev) => [
         ...prev,
         { id: Date.now() + 1, role: 'assistant', content: error.message, isError: true },
       ]);
     } finally {
+      // 5. Independente de sucesso ou falha, desliga o spinner
       setIsLoading(false);
     }
   };
@@ -78,7 +133,9 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 font-sans">
       
-      {/* Header com Toggle de Versão */}
+      {/* ==========================================
+          CABEÇALHO & SELETOR DE ARQUITETURA 
+      ========================================== */}
       <header className="flex items-center justify-between p-4 bg-gray-800 border-b border-gray-700 shadow-sm">
         <div className="flex items-center">
           <Database className="w-6 h-6 mr-3 text-emerald-400" />
@@ -107,10 +164,12 @@ function App() {
         </div>
       </header>
 
-      {/* Área do Chat */}
+      {/* ==========================================
+          ÁREA PRINCIPAL DO CHAT E RENDERIZAÇÃO
+      ========================================== */}
       <main className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
         
-        {/* Mensagem de Boas-Vindas Dinâmica (Muda de acordo com a Versão) */}
+        {/* EMPTY STATE: Tela inicial dinâmica baseada na versão escolhida */}
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center px-4 animate-in fade-in duration-500">
             <div className="p-4 bg-gray-800 rounded-full mb-6 border border-gray-700 shadow-lg">
@@ -143,7 +202,7 @@ function App() {
           </div>
         )}
 
-        {/* ... Restante do código de renderização das mensagens se mantém igual ... */}
+        {/* RENDERIZAÇÃO DAS MENSAGENS (Histórico) */}
         {messages.map((msg) => (
           <div key={msg.id} className={`flex max-w-4xl mx-auto ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`rounded-lg p-5 w-full md:w-4/5 ${msg.role === 'user' ? 'bg-gray-800 border border-gray-700 shadow-md' : 'bg-transparent'}`}>
@@ -156,8 +215,10 @@ function App() {
                 )}
               </div>
 
-              <p className="mb-4 text-gray-200 leading-relaxed">{msg.content}</p>
+              {/* whitespace-pre-wrap permite que quebras de linha (\n) sejam renderizadas visualmente */}
+              <p className="mb-4 text-gray-200 leading-relaxed whitespace-pre-wrap">{msg.content}</p>
 
+              {/* Bloco de renderização da Query SQL com Syntax Highlight visual */}
               {msg.sql && (
                 <div className="mb-4 rounded-md bg-gray-950 border border-gray-800 overflow-hidden shadow-inner">
                   <div className="flex items-center bg-gray-800 px-4 py-2 text-xs text-gray-400">
@@ -169,6 +230,7 @@ function App() {
                 </div>
               )}
 
+              {/* Bloco de renderização da Tabela HTML dinamicamente com base nas chaves do JSON */}
               {msg.data && msg.data.length > 0 && (
                 <div className="overflow-x-auto rounded-md border border-gray-700 bg-gray-800 shadow-sm">
                   <table className="min-w-full text-left text-sm">
@@ -192,6 +254,7 @@ function App() {
                 </div>
               )}
 
+              {/* Tratamento para queries válidas que retornaram tabela vazia do banco de dados */}
               {msg.data && msg.data.length === 0 && !msg.isError && (
                 <div className="p-4 border border-yellow-700 bg-yellow-900/20 text-yellow-500 rounded-md text-sm">
                   A consulta foi executada com sucesso, mas não retornou nenhum resultado do banco de dados.
@@ -201,6 +264,7 @@ function App() {
           </div>
         ))}
         
+        {/* INDICADOR DE CARREGAMENTO */}
         {isLoading && (
           <div className="flex max-w-4xl mx-auto justify-start animate-pulse">
             <div className="flex items-center space-x-3 text-gray-400 p-5">
@@ -212,7 +276,9 @@ function App() {
         <div ref={messagesEndRef} />
       </main>
 
-      {/* Área de Input Fixa */}
+      {/* ==========================================
+          RODAPÉ E BARRA DE DIGITAÇÃO FIXA
+      ========================================== */}
       <footer className="p-4 bg-gray-800 border-t border-gray-700 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
         <div className="max-w-4xl mx-auto relative">
           <form onSubmit={handleSubmit} className="relative flex items-center">
@@ -235,7 +301,7 @@ function App() {
           <div className="text-center mt-3 text-xs text-gray-500 flex justify-center items-center space-x-1">
             <span>A IA pode cometer erros.</span>
             <span className="hidden sm:inline">•</span>
-            <span>O motor de segurança impede comandos destrutivos (DROP, DELETE).</span>
+            <span>O motor de segurança impede comandos destrutivos.</span>
           </div>
         </div>
       </footer>
