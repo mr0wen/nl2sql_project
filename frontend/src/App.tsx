@@ -12,6 +12,9 @@ type Message = {
   sql?: string | null; // Armazena a query SQL gerada pela IA
   data?: any[];        // Armazena o array de resultados vindos do PostgreSQL
   isError?: boolean;   // Flag para renderização condicional de erros (vermelho)
+  
+  // Adicionado suporte para exibir a intenção detectada pela IA na interface
+  intent?: string;     
 };
 
 function App() {
@@ -91,30 +94,54 @@ function App() {
     setIsLoading(true);
 
     try {
+      // CONSTRUÇÃO DA MEMÓRIA (Stateless Context)
+      // Mapeia as mensagens já existentes na tela para enviar como histórico ao backend.
+      // O backend usará isso para entender contextos como "E quais DESSES ganharam Oscar?"
+      const historyForBackend = messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+
       // Faz a chamada ao nosso backend Rails (Service Object: GeminiSqlService)
+      // Adicionada a propriedade `history` ao payload
       const response = await fetch('http://localhost:3000/api/v1/queries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMessage.content, version }),
+        body: JSON.stringify({ 
+          question: userMessage.content, 
+          version: version,
+          history: historyForBackend
+        }),
       });
 
       const result = await response.json();
 
       // TRATAMENTO DE EXCEÇÃO DE API LIMIT: Captura o Erro 429 (Too Many Requests)
-      if (response.status === 429 || (result.error && result.error.includes('429'))) {
-        throw new Error('Limite diário da Inteligência Artificial atingido. A cota da API gratuita foi totalmente consumida. Por favor, retorne amanhã ou configure uma nova chave de acesso.');
+      // Agora o backend está configurado para devolver o status HTTP 429 verdadeiro
+      // se a cota do Gemini estourar, tornando esta validação 100% precisa.
+      if (response.status === 429) {
+        throw new Error('Limite diário da Inteligência Artificial atingido. A cota da API gratuita foi totalmente consumida. Por favor, aguarde alguns minutos ou configure uma nova chave.');
       }
 
-      // Tratamento genérico para erros do backend (ex: Prompt Injection detectado)
+      // Tratamento genérico para erros do backend (ex: Prompt Injection detectado ou falha de SQL)
       if (!response.ok) throw new Error(result.error || 'Erro desconhecido ao processar query');
 
       // 3. Monta a mensagem de sucesso com os dados retornados
+      // Se o backend retornar 'success', usamos a mensagem padrão de SQL gerado.
+      // Se retornar 'clarification' ou 'chat', usamos a mensagem devolvida pela IA.
+      let finalContent = result.message || 'Aqui está o resultado da sua consulta:';
+      
+      if (result.status === 'success') {
+         finalContent = `Aqui está o resultado da sua consulta (utilizando a arquitetura ${version.toUpperCase()}):`;
+      }
+
       const assistantMessage: Message = {
         id: Date.now() + 1,
         role: 'assistant',
-        content: `Aqui está o resultado da sua consulta (utilizando a arquitetura ${version.toUpperCase()}):`,
-        sql: result.sql || result.sql_generated, 
+        content: finalContent,
+        sql: result.sql_generated || result.sql, 
         data: result.data,
+        intent: result.intent
       };
       
       setMessages((prev) => [...prev, assistantMessage]);
@@ -207,11 +234,20 @@ function App() {
           <div key={msg.id} className={`flex max-w-4xl mx-auto ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`rounded-lg p-5 w-full md:w-4/5 ${msg.role === 'user' ? 'bg-gray-800 border border-gray-700 shadow-md' : 'bg-transparent'}`}>
               
-              <div className="flex items-center mb-3 text-sm font-medium">
-                {msg.role === 'user' ? (
-                  <span className="text-blue-400">Você</span>
-                ) : (
-                  <span className={msg.isError ? 'text-red-400' : 'text-emerald-400'}>Assistente</span>
+              <div className="flex items-center justify-between mb-3 text-sm font-medium">
+                <div className="flex items-center">
+                  {msg.role === 'user' ? (
+                    <span className="text-blue-400">Você</span>
+                  ) : (
+                    <span className={msg.isError ? 'text-red-400' : 'text-emerald-400'}>Assistente</span>
+                  )}
+                </div>
+
+                {/* Tag visual discreta para mostrar o roteamento de intenção da IA */}
+                {msg.intent && (
+                  <span className="text-[10px] px-2 py-1 rounded bg-gray-900 text-gray-400 border border-gray-700 uppercase tracking-wider">
+                    Intent: {msg.intent}
+                  </span>
                 )}
               </div>
 
@@ -220,7 +256,7 @@ function App() {
 
               {/* Bloco de renderização da Query SQL com Syntax Highlight visual */}
               {msg.sql && (
-                <div className="mb-4 rounded-md bg-gray-950 border border-gray-800 overflow-hidden shadow-inner">
+                <div className="mb-4 rounded-md bg-gray-950 border border-gray-800 overflow-hidden shadow-inner mt-4">
                   <div className="flex items-center bg-gray-800 px-4 py-2 text-xs text-gray-400">
                     <Terminal className="w-4 h-4 mr-2" /> PostgreSQL
                   </div>
@@ -232,7 +268,7 @@ function App() {
 
               {/* Bloco de renderização da Tabela HTML dinamicamente com base nas chaves do JSON */}
               {msg.data && msg.data.length > 0 && (
-                <div className="overflow-x-auto rounded-md border border-gray-700 bg-gray-800 shadow-sm">
+                <div className="overflow-x-auto rounded-md border border-gray-700 bg-gray-800 shadow-sm mt-4">
                   <table className="min-w-full text-left text-sm">
                     <thead className="bg-gray-900 border-b border-gray-700 text-gray-300">
                       <tr>
@@ -256,7 +292,7 @@ function App() {
 
               {/* Tratamento para queries válidas que retornaram tabela vazia do banco de dados */}
               {msg.data && msg.data.length === 0 && !msg.isError && (
-                <div className="p-4 border border-yellow-700 bg-yellow-900/20 text-yellow-500 rounded-md text-sm">
+                <div className="p-4 mt-4 border border-yellow-700 bg-yellow-900/20 text-yellow-500 rounded-md text-sm">
                   A consulta foi executada com sucesso, mas não retornou nenhum resultado do banco de dados.
                 </div>
               )}
@@ -269,7 +305,7 @@ function App() {
           <div className="flex max-w-4xl mx-auto justify-start animate-pulse">
             <div className="flex items-center space-x-3 text-gray-400 p-5">
               <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
-              <span>Analisando a estrutura do banco e gerando query SQL...</span>
+              <span>Analisando a estrutura do banco e processando sua mensagem...</span>
             </div>
           </div>
         )}
