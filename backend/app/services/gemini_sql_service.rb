@@ -97,11 +97,15 @@ class GeminiSqlService
   # Responsável por realizar a chamada HTTP para a API do Gemini.
   # Aqui montamos manualmente a requisição utilizando Net::HTTP.
   def make_api_request(system_instruction, messages)
-    uri = URI("#{API_URL}?key=#{@api_key}")
-    request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json')
+    uri = URI(API_URL)
+    request = Net::HTTP::Post.new(uri)
     
-    # Estrutura do payload separando o contexto estático (system_instruction)
-    # do fluxo dinâmico da conversa (contents)
+    # Passamos a chave de autenticação através do Header HTTP 'x-goog-api-key'.
+    # Isso impede que a chave seja registrada nos logs de erro do servidor (como HTTP 422 ou 500)
+    # caso a requisição falhe e a URL seja impressa no terminal.
+    request['Content-Type'] = 'application/json'
+    request['x-goog-api-key'] = @api_key
+    
     request.body = {
       system_instruction: { parts: [{ text: system_instruction }] },
       contents: messages
@@ -114,8 +118,7 @@ class GeminiSqlService
 
     parsed_response = JSON.parse(response.body) rescue {}
 
-    # Validação da resposta HTTP capturando a mensagem de erro do Google
-    # e roteando corretamente o código 429 de limite de taxa (Rate Limit).
+    # Validação da resposta HTTP com roteamento de erro 429 (Rate Limit).
     unless response.is_a?(Net::HTTPSuccess)
       error_message = parsed_response.dig('error', 'message') || response.message || "Erro desconhecido na resposta da API"
       

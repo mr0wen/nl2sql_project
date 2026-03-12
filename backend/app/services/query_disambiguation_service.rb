@@ -7,7 +7,7 @@ require 'json'
 # alucinações ao avaliar se a pergunta do usuário é clara o suficiente
 # dado o schema do banco, ou se requer uma pergunta de esclarecimento (follow-up).
 class QueryDisambiguationService
-  API_URL = "[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent)"
+  API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
   def initialize(question, schema_context)
     @question = question
@@ -51,11 +51,14 @@ class QueryDisambiguationService
   end
 
   def make_api_request(prompt)
-    uri = URI("#{API_URL}?key=#{@api_key}")
-    request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json')
+    uri = URI(API_URL)
+    request = Net::HTTP::Post.new(uri)
     
-    # Exigindo que o modelo responda em JSON puro utilizando a funcionalidade
-    # responseMimeType nativa da API do Gemini.
+    # Proteção da credencial trafegando a chave via Header.
+    # Evita exposição acidental da API Key em stack traces ou logs do Rails.
+    request['Content-Type'] = 'application/json'
+    request['x-goog-api-key'] = @api_key
+    
     request.body = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { responseMimeType: "application/json" }
