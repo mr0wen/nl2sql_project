@@ -17,11 +17,14 @@ class GeminiSqlService
   API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
   # Inicializa o serviço com a pergunta do usuário e a versão da arquitetura.
+  # Agora aceita o schema_context e o history para manter a memória de conversação.
   #
   # A chave da API é carregada a partir de variável de ambiente,
   # garantindo que credenciais não sejam expostas no código.
-  def initialize(question, version: :v2)
+  def initialize(question, schema_context, history: [], version: :v2)
     @question = question
+    @schema_context = schema_context
+    @history = history
     @version = version
     @api_key = ENV.fetch('GEMINI_API_KEY') { raise "GEMINI_API_KEY não configurada" }
   end
@@ -34,20 +37,20 @@ class GeminiSqlService
   # 3. Faz a requisição para a API do Gemini
   # 4. Extrai e sanitiza apenas a SQL da resposta
   def call
-    schema_context = DbSchemaExtractor.call(version: @version)
-    prompt = build_prompt(schema_context, @question, @version)
+    system_instruction = build_system_instruction(@schema_context, @version)
+    conversation_messages = build_conversation_history(@history, @question)
     
-    response = make_api_request(prompt)
+    response = make_api_request(system_instruction, conversation_messages)
     extract_sql(response)
   end
 
   private
 
-  # Constrói o prompt enviado ao LLM.
-  #
-  # O prompt inclui instruções rígidas de comportamento, o schema do banco
-  # e a pergunta do usuário. O objetivo é reduzir alucinações e garantir SQL executável.
-  def build_prompt(schema, question, version)
+  # Constrói o prompt de instrução do sistema (System Instruction).
+  # O prompt inclui instruções rígidas de comportamento e o schema do banco,
+  # mas agora é enviado separadamente da conversa para que a IA não "esqueça"
+  # as regras à medida que o histórico do chat cresce.
+  def build_system_instruction(schema, version)
     # Regras universais de segurança e formatação (Servem para V1 e V2)
     regras = <<~REGRAS
       1. Retorne APENAS o código SQL puro.
@@ -66,7 +69,7 @@ class GeminiSqlService
       REGRAS_V2
     end
 
-    <<~PROMPT
+    <<~INSTRUCTION
       Você é um especialista em banco de dados PostgreSQL. 
       Sua única tarefa é traduzir perguntas em linguagem natural para consultas SQL válidas.
       
@@ -75,22 +78,33 @@ class GeminiSqlService
       
       Schema do Banco de Dados:
       #{schema}
-      
-      Pergunta do usuário: "#{question}"
-      
-      Query SQL:
-    PROMPT
+    INSTRUCTION
+  end
+
+  # Constrói a estrutura de mensagens esperada pela API do Gemini,
+  # concatenando o histórico antigo com a nova pergunta do usuário.
+  def build_conversation_history(history, current_question)
+    formatted_history = ChatMemoryBuilderService.new(history).call
+    
+    formatted_history << {
+      role: 'user',
+      parts: [{ text: current_question }]
+    }
+
+    formatted_history
   end
 
   # Responsável por realizar a chamada HTTP para a API do Gemini.
   # Aqui montamos manualmente a requisição utilizando Net::HTTP.
-  def make_api_request(prompt)
+  def make_api_request(system_instruction, messages)
     uri = URI("#{API_URL}?key=#{@api_key}")
     request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json')
     
-    # Estrutura do payload esperada pela API do Gemini: contents -> parts -> text
+    # Estrutura do payload separando o contexto estático (system_instruction)
+    # do fluxo dinâmico da conversa (contents)
     request.body = {
-      contents: [{ parts: [{ text: prompt }] }]
+      system_instruction: { parts: [{ text: system_instruction }] },
+      contents: messages
     }.to_json
 
     # Executa a requisição HTTPS
@@ -98,12 +112,18 @@ class GeminiSqlService
       http.request(request)
     end
 
-    parsed_response = JSON.parse(response.body)
+    parsed_response = JSON.parse(response.body) rescue {}
 
-    # Validação da resposta HTTP capturando a mensagem de erro do Google.
+    # Validação da resposta HTTP capturando a mensagem de erro do Google
+    # e roteando corretamente o código 429 de limite de taxa (Rate Limit).
     unless response.is_a?(Net::HTTPSuccess)
-      error_message = parsed_response.dig('error', 'message') || response.message
-      raise StandardError, "Erro na API do Gemini: #{error_message}"
+      error_message = parsed_response.dig('error', 'message') || response.message || "Erro desconhecido na resposta da API"
+      
+      if response.code.to_i == 429
+        raise StandardError, "GEMINI_RATE_LIMIT: #{error_message}"
+      else
+        raise StandardError, "Erro de IA (SQL) [HTTP #{response.code}]: #{error_message}"
+      end
     end
 
     parsed_response
