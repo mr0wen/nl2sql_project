@@ -132,7 +132,7 @@ function App() {
       let finalContent = result.message || 'Aqui está o resultado da sua consulta:';
       
       if (result.status === 'success') {
-         finalContent = `Aqui está o resultado da sua consulta (utilizando a arquitetura ${version.toUpperCase()}):`;
+         finalContent = `Aqui está o resultado da sua consulta:`;
       }
 
       const assistantMessage: Message = {
