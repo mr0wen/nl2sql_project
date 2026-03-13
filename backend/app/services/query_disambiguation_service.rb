@@ -9,35 +9,39 @@ require 'json'
 class QueryDisambiguationService
   API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
-  def initialize(question, schema_context)
+  # Inicializador agora aceita o histórico de conversação
+  def initialize(question, schema_context, history: [])
     @question = question
     @schema_context = schema_context
+    @history = history
     @api_key = ENV.fetch('GEMINI_API_KEY') { raise "GEMINI_API_KEY não configurada" }
   end
 
   # Retorna um Hash estruturado com o status da intenção detectada pela IA.
   def call
-    prompt = build_disambiguation_prompt
-    response = make_api_request(prompt)
+    system_instruction = build_system_instruction
+    messages = build_conversation_history(@history, @question)
+    
+    response = make_api_request(system_instruction, messages)
     extract_json_response(response)
   end
 
   private
 
-  # Monta o prompt solicitando que a IA responda obrigatoriamente
-  # em formato JSON seguindo as regras de roteamento do sistema.
-  def build_disambiguation_prompt
+  # As regras passam a ser o System Instruction, garantindo que a IA
+  # saiba que deve analisar a pergunta ATUAL levando em conta o HISTÓRICO.
+  def build_system_instruction
     <<~PROMPT
       Você é o classificador de intenções e desambiguador de um assistente de banco de dados.
-      Sua tarefa é analisar a pergunta do usuário frente ao schema do banco e decidir o que fazer.
+      Sua tarefa é analisar a pergunta ATUAL do usuário frente ao schema do banco e ao contexto do histórico da conversa.
       
       Schema Disponível:
       #{@schema_context}
       
       Regras:
-      1. Se a pergunta for um cumprimento ou fora do tópico (off-topic), retorne o intent apropriado.
-      2. Se a pergunta sobre os dados for ambígua ou faltar parâmetros (ex: "melhores filmes" sem definir como medir isso), defina intent = "needs_clarification" e forneça uma "clarifying_question".
-      3. Se a pergunta for clara e totalmente possível de ser respondida usando APENAS as tabelas do schema, defina intent = "ready_for_sql".
+      1. Se a pergunta for um cumprimento ou fora do tópico (off-topic), defina intent = "greeting" ou "off_topic".
+      2. Se a pergunta sobre os dados for ambígua e a resposta NÃO estiver óbvia no histórico da conversa, defina intent = "needs_clarification" e forneça uma "clarifying_question".
+      3. IMPORTANTE: Se a pergunta usar pronomes (ex: "notas deles?", "e os outros?") mas o contexto estiver CLARO no histórico (ex: o usuário acabou de perguntar sobre atores/diretores), defina intent = "ready_for_sql". Não peça esclarecimentos se a resposta já estiver no contexto.
 
       Você DEVE responder APENAS com um JSON válido, usando exatamente esta estrutura:
       {
@@ -45,12 +49,22 @@ class QueryDisambiguationService
         "clarifying_question": "A pergunta que você fará ao usuário para desambiguar (deixe nulo se não precisar)",
         "reasoning": "Sua explicação interna e curta do porquê tomou essa decisão"
       }
-      
-      Pergunta do usuário: "#{@question}"
     PROMPT
   end
 
-  def make_api_request(prompt)
+  # Formata o histórico usando o construtor de memória existente
+  def build_conversation_history(history, current_question)
+    formatted_history = ChatMemoryBuilderService.new(history).call
+    
+    formatted_history << {
+      role: 'user',
+      parts: [{ text: current_question }]
+    }
+
+    formatted_history
+  end
+
+  def make_api_request(system_instruction, messages)
     uri = URI(API_URL)
     request = Net::HTTP::Post.new(uri)
     
@@ -59,8 +73,10 @@ class QueryDisambiguationService
     request['Content-Type'] = 'application/json'
     request['x-goog-api-key'] = @api_key
     
+    # Estrutura com System Instruction + Memory + JSON Output MimeType
     request.body = {
-      contents: [{ parts: [{ text: prompt }] }],
+      system_instruction: { parts: [{ text: system_instruction }] },
+      contents: messages,
       generationConfig: { responseMimeType: "application/json" }
     }.to_json
 

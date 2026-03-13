@@ -29,9 +29,13 @@ module Api
           schema_context = DbSchemaExtractor.call(version: version)
 
           # PASSO 2: Análise de Intenção e Desambiguação (User Intent)
-          # A IA avalia se a pergunta é clara o suficiente frente ao schema atual
-          # ou se trata-se apenas de uma saudação/pergunta fora de contexto.
-          intent_analysis = QueryDisambiguationService.new(question, schema_context).call
+          # Agora passamos o 'history' para que a IA consiga desambiguar
+          # pronomes (ex: "deles", "estes") baseada no contexto da conversa.
+          intent_analysis = QueryDisambiguationService.new(
+            question, 
+            schema_context,
+            history: history
+          ).call
 
           # Roteamento baseado na intenção detectada:
           case intent_analysis[:intent].to_sym
